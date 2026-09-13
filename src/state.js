@@ -717,19 +717,22 @@ NX.saveDraft = function () {
 
 NX.saveSelectedAsDraft = function () {
   const { state, showXkResult, askReplaceDraft } = NX;
-  const { allCourses, stageCart } = state;
+  const { allCourses, candidateCourses } = state;
   const selected = allCourses.filter(c => c.selected);
-  if (!selected.length) { showXkResult({ ok: false, msg: '没有已选课程' }); return; }
-  const courses = selected.map(c => ({
+  const selKeys = new Set(selected.map(c => c.code + '_' + NX.normSeq(c.seq || '0')));
+  const queued = (candidateCourses || []).filter(c => !selKeys.has(c.code + '_' + NX.normSeq(c.seq || '0')));
+  if (!selected.length && !queued.length) { showXkResult({ ok: false, msg: '没有已选或候补课程' }); return; }
+  const snap = c => ({
     code: c.code, seq: c.seq || '0', name: c.name, teacher: c.teacher || '',
     time: c.time || '', credits: c.credits || 0,
-    flag: c.typeCode === '006' ? 'bx' : c.typeCode === '008' ? 'xx' : c.typeCode === '007' ? 'rx' : 'bx',
+    flag: NX.typeCodeToFlag(c.typeCode),
     zy: c.zy || 3, baseFlag: NX.baseFlag(c),
-  }));
+  });
+  const courses = selected.map(snap).concat(queued.map(snap));
   const d = new Date();
-  const name = '已选课表 ' + (d.getMonth() + 1) + '/' + d.getDate();
+  const name = '已选+候补 ' + (d.getMonth() + 1) + '/' + d.getDate();
   if (askReplaceDraft(name, courses)) {
-    showXkResult({ ok: true, msg: '已选课程已保存为「' + name + '」' });
+    showXkResult({ ok: true, msg: '已保存「' + name + '」（已选 ' + selected.length + ' 门 + 候补 ' + queued.length + ' 门）' });
   }
 };
 
