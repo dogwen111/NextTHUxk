@@ -246,6 +246,29 @@ NX._courseForStageCore = function (c, pool) {
   return undefined;
 };
 
+// 暂存/草稿行 → 已选/候补状态：快照行是 storage 静态字段（addToStage /
+// addToCurrentDraft 只拷 code/seq/name/teacher/time/credits/flag/zy/note），
+// 不带 selected/isCandidate——须回池仲裁：courseForStage 定位池行判已选，
+// candidateCourses 判候补（键双层：快照键 → 池行键，两套课序号互通，
+// stageProbHtml 排队键同款）。返回 {type:'sel'} / {type:'cand',myPos,queueTotal} / null。
+NX.stageStatusOf = function (c) {
+  if (!c || !c.code) return null;
+  const cands = NX.state.candidateCourses || [];
+  const byKey = (code, seq) => cands.find(cc => cc.code === code && NX.normSeq(cc.seq || '0') === NX.normSeq(seq || '0'));
+  const ac = NX.courseForStage(c);
+  if (ac && ac.selected) return { type: 'sel' };   // 已选优先（队列里的陈旧候选行不作数）
+  const cand = byKey(c.code, c.seq) || (ac ? byKey(ac.code, ac.seq) : null);
+  if (cand) return { type: 'cand', myPos: cand.myPos || 0, queueTotal: cand.queueTotal || 0 };
+  return null;
+};
+
+// 状态徽章 HTML（暂存区/草稿行内用；配色与卡片 nx-tag-sel、预览课块一致）
+NX.stageStatusBadgeHtml = function (st) {
+  if (!st) return '';
+  if (st.type === 'sel') return '<span style="background:rgba(7,193,96,.12);color:#07c160;padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600;white-space:nowrap;flex:none">已选</span>';
+  return '<span style="background:rgba(255,159,26,.12);color:#ff9f1a;padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600;white-space:nowrap;flex:none">' + (st.myPos ? '排队第' + st.myPos + '/' + (st.queueTotal || '?') : '候选中') + '</span>';
+};
+
 NX.rebuildCourseMap = function () {
   const m = new Map();
   for (const c of NX.state.allCourses) m.set(c.code + '_' + NX.normSeq(c.seq || '0'), c);   // 键归一：两套前导零编号互通
@@ -469,10 +492,30 @@ NX.renderPreviewTT = function (courses, label) {
     const lbl = c.teacher ? c.name + '(' + c.teacher + ')' : c.name;
     let cellColor = '', probLabel = '', probBgColor = '';
     const qKey = c.code + '_' + NX.normSeq(c.seq);
-    const qd = queueDataMap[qKey];
+    let qd = queueDataMap[qKey];
+    // 池行键兜底 + 池行合成兜底（stageProbHtml 同族）：暂存/草稿课序与池/kyl
+    // 两套编号对不上时，用 courseForStage 仲裁出的池行自己的队列键查；kylSearch
+    // 未覆盖/未跑到时，池里搜索行自带余量列（草稿专属课经 backfillStageRows
+    // 补拉落池）→ 合成先亮「余X/Y」
+    if (!qd) {
+      const _ac = NX.courseForStage(c);
+      if (_ac) {
+        qd = queueDataMap[_ac.code + '_' + NX.normSeq(_ac.seq)];
+        if (!qd && _ac.capacity > 0 && _ac.remaining !== undefined) qd = { qRemaining: _ac.remaining, qCapacity: _ac.capacity, qQueue: 0 };
+      }
+    }
     const cand = candidateCourses.find(cc => cc.code === c.code && NX.normSeq(cc.seq) === NX.normSeq(c.seq || '0'));
+    // 暂存/草稿快照行回池查状态（快照不带 selected/isCandidate，下面的
+    // c.isCandidate 分支对快照恒不命中——已选/排队标识此前在 stage/draft 预览全丢）
+    const st = state.previewMode === 'selected' ? null : NX.stageStatusOf(c);
     if (c.manual) {
       cellColor = '#8b5cf6'; probLabel = '自定义'; probBgColor = 'rgba(139,92,246,.14)';
+    } else if (st && st.type === 'sel') {
+      // 回池命中已选：绿标优先于概率/余量（与已选视图 queue 阶段同款）
+      cellColor = '#07c160'; probLabel = '已选'; probBgColor = 'rgba(7,193,96,.14)';
+    } else if (st && st.type === 'cand') {
+      // 回池命中候补：位次/候选中（kbSearch 兜底候选无位次）
+      cellColor = '#ff9f1a'; probLabel = st.myPos ? '排队第' + st.myPos + '/' + (st.queueTotal || '?') + '人' : '候选中'; probBgColor = 'rgba(255,159,26,.14)';
     } else if (c.isCandidate && cand && cand.myPos) {
       // 候选提示不 gate 在 isQueuePhase（预选阶段候补课同样要看见位次；
       // kbSearch 兜底候选无位次 → 下方「候选中」分支）
@@ -741,6 +784,7 @@ NX.renderStageCart = function () {
       '<div style="display:flex;align-items:center;gap:4px">' +
       '<span class="nx-stage-name nx-jumpable" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '" data-teacher="' + esc(c.teacher || '') + '" data-time="' + esc(c.time || '') + '" title="点击按课号搜索此课程" style="min-width:80px;cursor:pointer">' + esc(c.name) + (c.teacher ? ' <span style="color:#9aa1ac;font-weight:400">' + esc(c.teacher) + '</span>' : '') + '</span>' +
       '<span class="nx-stage-info">' + c.credits + '学分</span>' +
+      NX.stageStatusBadgeHtml(NX.stageStatusOf(c)) +
       '<select class="nx-stage-flag-sel" data-idx="' + i + '" style="padding:2px 4px;border-radius:6px;border:1px solid rgba(0,0,0,.1);font-size:10px;font-family:inherit;background:#fff;cursor:pointer">' + flOpts + '</select>' +
       '<select class="nx-stage-zy-sel" data-idx="' + i + '" style="padding:2px 4px;border-radius:6px;border:1px solid rgba(0,0,0,.1);font-size:10px;font-family:inherit;background:#fff;cursor:pointer">' + zyOpts + '</select>' +
       '<button class="nx-stage-rm" data-idx="' + i + '">✕</button></div>' + prob + '</div>';
@@ -841,22 +885,11 @@ NX.backfillStageProbs = async function () {
 
 // ─── Drafts Rendering ─────────────────────────────────────────
 
+// 草稿行概率/余量与暂存行同源（用户定案「草稿专属课走暂存列表取数链路」）：
+// 直接委托 stageProbHtml——快照键 → 池行键（courseForStage 教师仲裁，替代旧
+// 精确键 getCourse，两套课序号更稳）→ 池行合成，三层兜底一处维护。
 NX.draftCourseProbHtml = function (c) {
-  const { state, fullProbGrid, baseFlag, getCourse } = NX;
-  const { isQueuePhase, queueDataMap } = state;
-  const ac = getCourse(c.code, c.seq);
-  if (!ac) return '';
-  if (isQueuePhase) {
-    const qKey = c.code + '_' + NX.normSeq(c.seq);
-    const qd = queueDataMap[qKey];
-    if (qd) {
-      const rc = qd.qRemaining > 0 ? '#07c160' : '#ee4d4d';
-      return '<div style="margin-top:2px;display:flex;gap:4px;align-items:center;flex-wrap:wrap"><span style="background:rgba(' + (qd.qRemaining > 0 ? '52,199,89' : '255,59,48') + ',.12);color:' + rc + ';padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600">余' + qd.qRemaining + '/' + qd.qCapacity + '</span>' + (qd.qQueue > 0 ? '<span style="background:rgba(255,159,26,.12);color:#ff9f1a;padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600">排队' + qd.qQueue + '人</span>' : '') + '</div>';
-    }
-    return '';
-  }
-  const bf = c.baseFlag || baseFlag(ac);
-  return fullProbGrid(ac, bf).replace(/margin-top:3px/, 'margin-top:2px');
+  return NX.stageProbHtml(c);
 };
 
 NX.renderDrafts = function () {
@@ -884,6 +917,7 @@ NX.renderDrafts = function () {
         courseList += '<div style="display:flex;align-items:center;gap:4px;padding:3px 0;font-size:11px;border-bottom:1px solid rgba(0,0,0,.03)">' +
           '<span class="nx-jumpable" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '" data-teacher="' + esc(c.teacher || '') + '" data-time="' + esc(c.time || '') + '" title="点击按课号搜索此课程" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:#1f2329;cursor:pointer">' + esc(c.name) + '</span>' +
           '<span style="font-size:10px;color:#9aa1ac">' + c.credits + '学分</span>' +
+          NX.stageStatusBadgeHtml(NX.stageStatusOf(c)) +
           '<select class="nx-draft-flag" data-di="' + di + '" data-ci="' + ci + '" style="padding:1px 3px;border-radius:5px;border:1px solid rgba(0,0,0,.1);font-size:10px;font-family:inherit;background:#fff;cursor:pointer">' + flOpts + '</select>' +
           '<select class="nx-draft-zy" data-di="' + di + '" data-ci="' + ci + '" style="padding:1px 3px;border-radius:5px;border:1px solid rgba(0,0,0,.1);font-size:10px;font-family:inherit;background:#fff;cursor:pointer">' + zyOpts + '</select>' +
           prob +
