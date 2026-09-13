@@ -347,3 +347,11 @@ NX.lc = function (s) {
   if (v === undefined) { v = s.toLowerCase(); NX._lowerCache.set(s, v); }
   return v;
 };
+
+// 学分规则：本校课（课号纯数字，8 位）学分 = 课号最后一位；
+// 外校课（PK/GPK/BW 等含字母前缀）返回 null，调用方保留学分列原解析值。
+// 各学分解析源头统一走此函数，末位回填/合并/快照链自动继承。
+NX.lastDigitCredits = function (code) {
+  const s = String(code || '');
+  return /^\d+$/.test(s) ? (parseInt(s.slice(-1), 10) || 0) : null;
+};

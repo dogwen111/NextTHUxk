@@ -413,6 +413,9 @@ NX.launch = async function launch() {
     renderPreviewTT(pool.filter(c => c.selected).concat(state.candidateCourses), '当前已选');
     NX.renderQueueSection();
     await renderStageAndDrafts();
+    // 暂存区内已是已选/候补的课刷新为整体课表正源（#46 脏时间/假冲突修复；
+    // 整体课表在 fetchSelectedCourses 阶段已缓存，这里不产生新请求）
+    NX.syncStageWithWholeTT().catch(e => console.warn(TAG, 'stage sync:', e));
     NX.backfillStageRows();   // 暂存行不在池（重载后池只含已选/候补）→ 概率/时间全断：此时 stageCart 才真正加载完
     NX.finishLaunch({ ts: Date.now() }, selectedCourses.length, 0, false);
     NX.filterCourses();      // 初始落点：浏览模式第 1 页（1 个请求），随时查询
@@ -468,6 +471,8 @@ async function renderStageAndDrafts() {
   state.savedDrafts.forEach(d => d.courses.forEach(c => {
     if (!c.baseFlag) { const ac = state.allCourses.find(x => x.code === c.code); c.baseFlag = ac ? baseFlag(ac) : 'rx'; migrated = true; }
   }));
+  // 学分规则迁移：本校课快照学分全量重算为课号末位（外校课保留旧值）
+  if (NX.migrateStageCredits(state.stageCart, state.savedDrafts)) migrated = true;
   if (migrated) { store.set('stageCart', state.stageCart); store.set('drafts', state.savedDrafts); }
   renderStageCart();
   renderDrafts();

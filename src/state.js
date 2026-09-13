@@ -543,6 +543,8 @@ NX.resolveCourseZy = async function (courses, selMap, zyCache) {
 NX.refreshSelected = async function () {
   const { state, store, fetchSelectedCourses, fetchCandidateCourses, resolveCourseZy, filterCourses, renderPreviewTT } = NX;
   const { allCourses } = state;
+  // 选退课/退队后整体课表必变，弃缓存重拉正源（#46）
+  if (NX.invalidateWholeTT) NX.invalidateWholeTT();
   // 重新获取已选课程
   const selected = await fetchSelectedCourses();
   const selMap = {};
@@ -562,6 +564,8 @@ NX.refreshSelected = async function () {
   allCourses.forEach(c => {
     c.isCandidate = candKeys.has(c.code + '_' + (c.seq || '0'));
   });
+  // 暂存区中已是已选/候补的课刷新为课表正源时间（有改动才重渲）
+  try { await NX.syncStageWithWholeTT(); } catch (e) { console.warn(NX.TAG, 'stage sync:', e); }
   // 课余量/排队同步（池内按需，提交选课后余量必变）；非队列阶段走志愿统计
   try {
     const qResult = await NX.fetchQueueData(allCourses);
@@ -587,6 +591,41 @@ NX.refreshSelected = async function () {
 };
 
 // ─── Stage Cart & Drafts ──────────────────────────────────────
+
+// 学分规则迁移（启动全量重算，用户决策）：本校课（课号纯数字）的暂存/草稿
+// 快照学分按「课号最后一位」重算（NX.lastDigitCredits）；外校课（返回 null）
+// 保留旧快照。返回是否有改动，调用方决定是否写盘。
+NX.migrateStageCredits = function (stageCart, savedDrafts) {
+  let changed = false;
+  const fix = it => {
+    if (!it || !it.code) return;
+    const cr = NX.lastDigitCredits(it.code);
+    if (cr !== null && (it.credits || 0) !== cr) { it.credits = cr; changed = true; }
+  };
+  (stageCart || []).forEach(fix);
+  (savedDrafts || []).forEach(d => (d.courses || []).forEach(fix));
+  return changed;
+};
+
+// 暂存区与整体课表同步：暂存项若已是已选/候补课（会出现在个人整体课表里），
+// time/teacher 快照以课表正源刷新（旧快照可能带着 yxSearchTab 脏时间——假
+// 冲突「周一 5-6节 思想文化素养 × 工程表达」即此来）；暂存且未选的课课表
+// 里没有，map 命不中，保持原快照。有改动才写盘 + 重渲。
+NX.syncStageWithWholeTT = async function () {
+  const { state, store, renderStageCart, renderPreviewTT, invalidatePreview } = NX;
+  const { stageCart } = state;
+  if (!stageCart || !stageCart.length) return;
+  const sig = c => [c.code, c.time || '', c.teacher || '', c.name || ''].join('|');
+  const before = stageCart.map(sig).join(';');
+  await NX.overrideFromWholeTT(stageCart);
+  if (stageCart.map(sig).join(';') === before) return;
+  store.set('stageCart', stageCart);
+  invalidatePreview();
+  try { renderStageCart(); } catch (e) {}
+  try {
+    if (state.previewMode === 'stage') renderPreviewTT(stageCart, (state.$('nextthuxk-preview-info') || {}).textContent || '暂存课表');
+  } catch (e) {}
+};
 
 // #36-2：把课程加入当前正在预览的草稿（此前草稿「编辑」只能删不能加）
 NX.addToCurrentDraft = function (code, seq, flag, zy) {
