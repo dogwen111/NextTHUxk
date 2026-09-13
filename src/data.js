@@ -1541,6 +1541,7 @@ NX.tabSearchByKch = async function (kch) {
 NX.backfillCandidateMeta = async function (candidates) {
   const todo = (candidates || []).filter(c => c && c.code && !c.credits);
   if (!todo.length) return;
+  if (NX.waitInitialBrowse) await NX.waitInitialBrowse();
   await NX.runPool(todo, 4, async c => {
     await new Promise(r => setTimeout(r, 30));   // 微错峰
     try {
@@ -1635,11 +1636,27 @@ NX.isSsoLoginHtml = function (html) {
   return !!html && (html.includes('do/off/ui/auth/login') || html.includes('passLogin'));
 };
 
+NX._serverSearchReset = async function () {
+  const { state, fetchPage } = NX;
+  await fetchPage(state.BASE + '/xkBks.vxkBksJxjhBs.do?m=kkxxSearch&p_xnxq=' + encodeURIComponent(state.SEM));
+};
+
+NX._serverSearchSessionKey = function (opts) {
+  const { state } = NX;
+  const o = opts || {};
+  return JSON.stringify([
+    state.SEM, state.BASE,
+    (o.kch || '').trim(), (o.kcm || '').trim(), (o.teacher || '').trim(),
+    o.department || '', o.weekday || '', o.section || '', o.grade || '',
+    o.rxklxm || '', o.kctsm || '', !!o.onlyAvailable, !!o.gradAvail,
+  ]);
+};
+
 /** 服务端课程搜索（kkxxSearch，OneTHU searchXkCourses 语义移植）。
  *  中文筛选参数（课名/教师）必须 gbkPercentEncode——GBK 页面 UTF-8 直发解出
  *  乱码 LIKE 匹配不到 → 0 行。pageKind：ok=有行；empty=结果页但 0 行（真无匹配）；
  *  unknown=异常页（会话/网络，带 htmlHead 诊断）。 */
-NX.serverSearch = async function (opts) {
+NX._serverSearchRaw = async function (opts) {
   const { state, fetchPage, parseCatalog } = NX;
   const { SEM, BASE } = state;
   if (!state.isZhjwxk && !state.isWebvpn) return { rows: [], pageKind: 'unknown', msg: '非教务站点' };
@@ -1648,22 +1665,27 @@ NX.serverSearch = async function (opts) {
   const enc = NX.gbkPercentEncode;
   const parts = ['m=kkxxSearch', 'p_xnxq=' + encodeURIComponent(SEM)];
   if (page > 1) parts.push('page=' + page);
-  if (o.kch && o.kch.trim()) parts.push('p_kch=' + encodeURIComponent(o.kch.trim()));
+  parts.push('p_kch=' + encodeURIComponent((o.kch || '').trim()));
   const kw = o.kcm && o.kcm.trim();
-  if (kw) parts.push('p_kcm=' + enc(kw));
+  parts.push('p_kcm=' + enc(kw || ''));
   const teacher = o.teacher && o.teacher.trim();
-  if (teacher) parts.push('p_zjjsxm=' + enc(teacher));
-  if (o.department) parts.push('p_kkdwnm=' + encodeURIComponent(o.department));
-  if (o.weekday) parts.push('p_skxq=' + encodeURIComponent(o.weekday));
-  if (o.section) parts.push('p_skjc=' + encodeURIComponent(o.section));
-  if (o.grade) parts.push('p_ssnj=' + encodeURIComponent(o.grade));
-  if (o.rxklxm) parts.push('p_rxklxm=' + encodeURIComponent(o.rxklxm));
-  if (o.kctsm) parts.push('p_kctsm=' + encodeURIComponent(o.kctsm));
-  if (o.onlyAvailable) parts.push('p_bkskyl_ig=0');
-  if (o.gradAvail) parts.push('p_yjskyl_ig=0');
+  parts.push('p_zjjsxm=' + enc(teacher || ''));
+  parts.push('p_kkdwnm=' + encodeURIComponent(o.department || ''));
+  parts.push('p_skxq=' + encodeURIComponent(o.weekday || ''));
+  parts.push('p_skjc=' + encodeURIComponent(o.section || ''));
+  parts.push('p_ssnj=' + encodeURIComponent(o.grade || ''));
+  parts.push('p_rxklxm=' + encodeURIComponent(o.rxklxm || ''));
+  parts.push('p_kctsm=' + encodeURIComponent(o.kctsm || ''));
+  parts.push('p_bkskyl_ig=' + (o.onlyAvailable ? '0' : ''));
+  parts.push('p_yjskyl_ig=' + (o.gradAvail ? '0' : ''));
   const url = BASE + '/xkBks.vxkBksJxjhBs.do?' + parts.join('&') + '&_t=' + Date.now();
   let html;
-  try { html = await fetchPage(url); } catch (e) {
+  const sessionKey = NX._serverSearchSessionKey(o);
+  const resetSession = state._serverSearchSessionKey !== sessionKey;
+  try {
+    if (resetSession) await NX._serverSearchReset();
+    html = await fetchPage(url);
+  } catch (e) {
     return { rows: [], pageKind: 'unknown', htmlHead: String(e.message || e) };
   }
   if (NX.isSsoLoginHtml(html)) {
@@ -1672,6 +1694,7 @@ NX.serverSearch = async function (opts) {
   if (NX.isXkDeadHtml(html)) {
     return { rows: [], pageKind: 'unknown', htmlHead: '会话死页（' + html.replace(/<[^>]+>/g, ' ').trim().slice(0, 80) + '）' };
   }
+  if (resetSession) state._serverSearchSessionKey = sessionKey;
   const rows = parseCatalog(new DOMParser().parseFromString(html, 'text/html'));
   const tp = /共\s*(\d+)\s*页/.exec(html);
   const totalPages = tp ? parseInt(tp[1], 10) : undefined;
@@ -1682,6 +1705,16 @@ NX.serverSearch = async function (opts) {
   return isResultPage
     ? { rows, page, hasMore: false, totalPages, pageKind: 'empty' }
     : { rows, page, hasMore: false, totalPages, totalRows, pageKind: 'unknown', htmlHead: html.slice(0, 600).replace(/\s+/g, ' ') };
+};
+
+NX._serverSearchQueue = Promise.resolve();
+NX.serverSearch = function (opts) {
+  const request = NX._serverSearchQueue.then(
+    () => NX._serverSearchRaw(opts),
+    () => NX._serverSearchRaw(opts)
+  );
+  NX._serverSearchQueue = request.then(() => {}, () => {});
+  return request;
 };
 
 /** 风暴护栏版服务端搜索（OneTHU data.ts newSearch 语义移植）：

@@ -778,6 +778,7 @@ NX.scheduleProbBackfill = function () {
 };
 NX.backfillStageProbs = async function () {
   const state = NX.state;
+  if (NX.waitInitialBrowse) await NX.waitInitialBrowse();
   if (state.isQueuePhase) return;   // 排队阶段概率来自 queueDataMap，不吃池
   if (state._loadingAll || state._ssBusy) {
     state._probBfDeferred = (state._probBfDeferred || 0) + 1;
@@ -1338,6 +1339,13 @@ NX.renderListFooter = function (o) {
     const lb = listEl.querySelector('.nx-loadall');
     if (lb) lb.onclick = () => NX.loadAllSearch();
   }
+  if (state._searchError) {
+    const warn = document.createElement('div');
+    warn.className = 'nx-st err';
+    warn.style.cssText = 'text-align:center;padding:8px 0 2px;font-size:11px';
+    warn.textContent = state._searchError;
+    listEl.prepend(warn);
+  }
   const pager = document.createElement('div');
   pager.style.cssText = 'display:flex;gap:8px;justify-content:center;align-items:center;padding:10px 0 4px;flex-wrap:wrap';
   const cur = document.createElement('span');
@@ -1483,9 +1491,39 @@ NX.loadAllSearch = async function () {
 };
 
 // 浏览模式跳页：置页码 → 作废指纹 → 重新走查询管线（一次一页）
+NX.beginInitialBrowse = function () {
+  const state = NX.state;
+  if (state._initialBrowsePending || state._initialBrowseDone) return;
+  state._initialBrowsePending = true;
+  state._initialBrowsePromise = new Promise(resolve => { state._initialBrowseResolve = resolve; });
+};
+
+NX.finishInitialBrowse = function (ok) {
+  const state = NX.state;
+  if (!state._initialBrowsePending) return;
+  state._initialBrowsePending = false;
+  state._initialBrowseDone = !!ok;
+  const resolve = state._initialBrowseResolve;
+  state._initialBrowseResolve = null;
+  if (resolve) resolve(!!ok);
+};
+
+NX.waitInitialBrowse = function () {
+  const state = NX.state;
+  return state._initialBrowsePending ? state._initialBrowsePromise : Promise.resolve(true);
+};
+
 NX.browseGoto = function (page) {
   const state = NX.state;
-  state._browsePage = Math.max(1, page);
+  const totalPages = state._searchTotalPages || 0;
+  state._browseRestore = state._browseRestore || {
+    page: state._browsePage || 1,
+    rows: (state._searchRows || []).slice(),
+    totalPages: state._searchTotalPages || 0,
+    totalRows: state._searchTotalRows || 0,
+    hasMore: state._browseHasMore,
+  };
+  state._browsePage = Math.max(1, totalPages > 0 ? Math.min(page, totalPages) : page);
   state._serverSig = null;
   NX.filterCourses();
 };
@@ -1532,6 +1570,24 @@ NX.runServerSearch = async function () {
       if (!queryMode) opts.page = state._browsePage || 1;   // 浏览模式：单页
       try {
         let res = queryMode ? await NX.serverSearchStorm(opts) : await NX.serverSearch(opts);
+        const requestedPage = opts.page || 1;
+        const browsePageMismatch = result => !queryMode
+          && requestedPage > 1
+          && (result.totalPages || 0) > 0
+          && requestedPage > result.totalPages;
+        state._browseMismatch = false;
+        if (browsePageMismatch(res)) {
+          console.warn(NX.TAG, 'browse page mismatch:', requestedPage, '/', res.totalPages, 'retry once');
+          res = await NX.serverSearch({ ...opts, page: requestedPage });
+          if (browsePageMismatch(res)) {
+            state._browseMismatch = true;
+            throw new Error('browse pagination mismatch: page ' + requestedPage + ' > total ' + res.totalPages);
+          }
+        }
+        if (!queryMode) state._browseRestore = null;
+        if (!queryMode && state._initialBrowsePending && res.pageKind !== 'unknown') {
+          NX.finishInitialBrowse(res.pageKind === 'ok');
+        }
         // 外校课号 p_kch 搜不到（教务课号索引不含 PK/GPK/BW 前缀课号，用户实测：
         // 跳转/搜索框输入 BW3w0008 显示无结果）→ 池里有这门课（已选/暂存/跳转
         // 来源都带课名）→ 自动换课名重搜，卡片/回填链路全恢复
@@ -1583,7 +1639,19 @@ NX.runServerSearch = async function () {
       }
       if (state._serverSig === ranSig) break;   // 条件未再变 → 收敛
     }
+    if (state._browseMismatch && state._browseRestore) {
+      const restore = state._browseRestore;
+      state._browsePage = restore.page;
+      state._searchRows = restore.rows;
+      state._searchTotalPages = restore.totalPages;
+      state._searchTotalRows = restore.totalRows;
+      state._browseHasMore = restore.hasMore;
+      state._browseRestore = null;
+      state._searchError = '\u6559\u52a1\u8fd4\u56de\u5206\u9875\u5f02\u5e38\uff0c\u5df2\u4fdd\u7559\u539f\u9875\u7801';
+    }
+    state._browseMismatch = false;
   } finally {
+    NX.finishInitialBrowse(false);
     state._ssBusy = false;
   }
   if (state._ssPending) { state._ssPending = false; NX.runServerSearch(); return; }
