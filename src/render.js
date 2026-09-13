@@ -159,8 +159,10 @@ NX.courseCardHtml = function (c, ctx) {
         : '';
       selectBtn = '<select class="nx-type-select" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '">' + flagOpts + '</select><select class="nx-zy-select" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '"><option value="3">3志愿</option><option value="2">2志愿</option><option value="1">1志愿</option></select>' + probInline + '<button class="nx-select-btn" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '">选课</button><button class="nx-stage-btn nx-add-stage" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '"' + (inStage ? ' disabled' : '') + '>' + (inStage ? '已暂存' : '暂存') + '</button>' + addToDraftBtn;
     } else if (c.isCandidate && cand) {
-      // 已在候补队列中：显示排队位置 + 删除按钮
+      // 已在候补队列中：显示排队位置 + 暂存 + 删除
+      const inStage = stageSet.has(c.code + '_' + String(c.seq || '0'));
       selectBtn = '<span style="font-size:11px;color:#ff9f1a;font-weight:600">排队第' + cand.myPos + '名 / 共' + cand.queueTotal + '人</span>' +
+        '<button class="nx-stage-btn nx-add-stage-sel" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '" data-flag="' + typeCodeToFlag(cand.typeCode) + '" data-zy="' + (cand.zy || 3) + '"' + (inStage ? ' disabled' : '') + '>' + (inStage ? '已暂存' : '暂存') + '</button>' +
         '<button class="nx-drop-btn" data-code="' + esc(c.code) + '" data-seq="' + esc(c.seq || '0') + '">删除</button>';
     } else {
       // 已满但未在队列：允许排队选课
