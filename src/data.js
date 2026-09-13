@@ -5,6 +5,11 @@ var NX = NX || {};
 
 // ─── Parsing Helpers ──────────────────────────────────────────
 
+// 本校课学分取课号末位（纯数字课号）；PK/GPK/BW 外校前缀课号用表内解析值
+NX.creditsOf = function (code, fallback) {
+  return /^\d+$/.test(code || '') ? parseInt(code.slice(-1)) || 0 : (fallback || 0);
+};
+
 NX.parsePlan = function (doc) {
   const rows = doc.querySelectorAll('table#kcTable tr');
   const out = [];
@@ -114,7 +119,7 @@ NX.parseCatalog = function (doc) {
       code,
       seq: cell(ix('seq')),
       name,
-      credits: parseFloat(cell(ix('credits'))) || 0,
+      credits: NX.creditsOf(code, parseFloat(cell(ix('credits'))) || 0),
       teacher: cell(tIdx),
       teacherId,
       department: cell(ix('department')),
@@ -1137,7 +1142,7 @@ NX.fetchSelectedCourses = async function () {
       const nameCell = [cell(4), cell(3)].find(x => x !== '' && !/^\d+$/.test(x)) || '';
       selected.push({
         code, seq, name: nameCell || cell(1), teacher: cell(7) || cell(2),
-        time: cell(6) || cell(3), credits: parseFloat(cell(8) || cell(4)) || 0,
+        time: cell(6) || cell(3), credits: NX.creditsOf(code, parseFloat(cell(8) || cell(4)) || 0),
         typeLabel,
         zy: zyNum,
         typeCode: isSportsCourse ? 'ty' : (zyInfo.typeCode || ''),
@@ -1562,7 +1567,7 @@ NX.parseTabGrid = function (html, attr) {
         code, seq: seq || '0', name,
         attr: (cells[1] || '').replace(/<[^>]+>/g, '').trim() || attr || '',
         time: cells[6] || '', teacher: cells[7] || '',
-        credits: parseFloat(cells[8]) || 0,
+        credits: NX.creditsOf(code, parseFloat(cells[8]) || 0),
         capacity: 0, remaining: 0, available: true,   // 页签行无余量列——未知≠已满，按需补拉会填
         selected: false, queue: '', group: '', note: '', xkTextNote: '',
         partial: true,   // OneTHU 同款标记：元数据未由全量目录补全
