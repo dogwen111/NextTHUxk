@@ -426,10 +426,21 @@ NX.launch = async function launch() {
 };
 
 // ─── Launch 公共收尾（缓存路径与全量路径复用） ───────────────
-// 暂存行按需补拉：暂存课不在池（重载后池只含已选/候补）→ 概率/时间全断。
-// 必须在 renderStageAndDrafts 之后调用（stageCart 那时才从 storage 加载完）。
+// 暂存/草稿行按需补拉：不在池的课（重载后池只含已选/候补）→ 概率/时间/余量
+// 全断。草稿专属课走暂存同款取数链路（用户定案）：补拉落池后 stageProbHtml
+// 三层兜底与预览池行合成兜底点亮「余X/Y」。必须在 renderStageAndDrafts 之后
+// 调用（stageCart/savedDrafts 那时才从 storage 加载完）。
 NX.backfillStageRows = function () {
-  const stageMiss = (state.stageCart || []).filter(s => !state.allCourses.some(ac => ac.code === s.code && NX.normSeq(ac.seq || '0') === NX.normSeq(s.seq || '0')));
+  const seen = new Set();
+  const stageMiss = [];
+  (state.stageCart || []).concat((state.savedDrafts || []).flatMap(d => d.courses || []))
+    .forEach(s => {
+      if (!s.code) return;
+      const k = s.code + '_' + NX.normSeq(s.seq || '0');
+      if (seen.has(k)) return;   // 同课多草稿/暂存只拉一次
+      seen.add(k);
+      if (!state.allCourses.some(ac => ac.code === s.code && NX.normSeq(ac.seq || '0') === NX.normSeq(s.seq || '0'))) stageMiss.push(s);
+    });
   if (!stageMiss.length) return;
   (async () => {
     if (NX.waitInitialBrowse) await NX.waitInitialBrowse();
@@ -450,14 +461,18 @@ NX.backfillStageRows = function () {
             const same = state.allCourses.filter(x => x.code === s.code);
             if (state.volMap) NX.applyVolunteer(same, state.volMap);   // volMap 已到就立即套（不等下次渲染）
           }
-        } catch (e) { console.warn(TAG, 'stage 行补拉:', s.code, e); }
+        } catch (e) { console.warn(TAG, '暂存/草稿行补拉:', s.code, e); }
       }));
     }
     state.selVersion = (state.selVersion || 0) + 1;
     NX.rebuildCourseMap();
     try { NX.renderStageCart(); } catch (e) {}
+    try { NX.renderDrafts(); } catch (e) {}   // 草稿行已选/排队徽章 + 余量随落池点亮
     try { NX.filterCourses(); } catch (e) {}
-    console.log(TAG, 'stage 行补拉完成:', stageMiss.length, '门');
+    try {
+      if (state.previewMode === 'stage' || state.previewMode === 'draft') NX.renderPreviewTT(NX.getPreviewCourses(), (state.$('nextthuxk-preview-info') || {}).textContent || '');   // 保留 label 重渲（state.js 同款模式）
+    } catch (e) {}
+    console.log(TAG, '暂存/草稿行补拉完成:', stageMiss.length, '门');
   })();
 };
 

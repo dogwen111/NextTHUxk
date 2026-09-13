@@ -180,7 +180,7 @@ launch()
 ├── 学期竞态守卫后写 staticData（仅 plan）
 ├── renderPlan / renderPreviewTT / renderQueueSection
 ├── renderStageAndDrafts()                # 暂存 + 草稿载入 + baseFlag 迁移
-├── backfillStageRows()                   # 暂存课不在池 → 按课号补拉
+├── backfillStageRows()                   # 暂存/草稿课不在池 → 按课号补拉（落池点亮暂存余量徽章/草稿预览合成）
 ├── finishLaunch(...)                     # 缓存信息、志愿定时同步、AI 配置回填、
 │                                         # backfillSelTimes、社区评价索引
 └── filterCourses()                       # 初始落点：浏览模式第 1 页
@@ -482,7 +482,12 @@ note/time 合成预览行（不改原行，返回合成副本）。每次渲染�
 - **同日重叠分道**（簇算法，render.js:537-563）：簇 = 首尾相接/重叠的块序列，
   簇内独立分道（lane/lanes），孤立块满宽。绝不用全日总道数劈半天。
 - 课块着色：候选=橙（排队位次）、已选(队列阶段)=绿、自定义=紫、暂存/草稿=
-  概率色、无概率色按课名稳定取色（`pvColorOf` 哈希调色板）。
+  概率色、无概率色按课名稳定取色（`pvColorOf` 哈希调色板）。暂存/草稿快照行
+  不带 `selected/isCandidate`，stage/draft 预览经 `stageStatusOf` 回池仲裁——
+  命中已选=绿「已选」、命中候补=橙「排队第X/Y人」，优先于概率/余量标签。余量
+  标签同 `stageProbHtml` 三层兜底：queueDataMap 快照键 → 池行键（courseForStage）
+  → 池行合成（capacity/remaining）；草稿专属课经 `backfillStageRows` 补拉落池后
+  仅由池行合成兜底点亮预览标签（草稿列表行不显示课余量，kyl 查询集不并入草稿课号）。
 - 课块可直接操作：✕ 移除（已选退选走警告弹窗 / 暂存移除 / 草稿删除）、点击
   跳转定位。
 
@@ -515,8 +520,8 @@ note/time 合成预览行（不改原行，返回合成副本）。每次渲染�
 |---|---|---|
 | `renderPreviewTT` | `#nextthuxk-preview-tt` | 时间轴课表（§9.6） |
 | `renderQueueSection` | `#nextthuxk-queue-list` | 右栏候选队列（排队位次 + 退队） |
-| `renderStageCart` | `#nextthuxk-stage-list` | 暂存区（每课独立调类型/志愿 + 概率网格 + 冲突汇总） |
-| `renderDrafts` | `#nextthuxk-drafts` | 草稿卡列表（展开/预览载入/提交/导出/删除） |
+| `renderStageCart` | `#nextthuxk-stage-list` | 暂存区（每课独立调类型/志愿 + 已选/排队徽章（`stageStatusOf` 回池仲裁）+ 概率网格 + 冲突汇总） |
+| `renderDrafts` | `#nextthuxk-drafts` | 草稿卡列表（展开/预览载入/提交/导出/删除；展开行含已选/排队徽章）；`refreshSelected` 选退课后重渲同步徽章 |
 | `renderPlan` / `renderPlanView` | `#nextthuxk-plan` / `#nextthuxk-list` | 右栏方案进度卡 / 左栏方案分组视图 |
 | `showCourseModal` | `#nextthuxk-modal` | 课程简介弹窗（fetchCourseDetail） |
 | `renderListFooter` | `#nextthuxk-list` 尾部 | 分页条 + 数据不完整提示 + 加载全部 |
