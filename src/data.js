@@ -24,7 +24,7 @@ NX.parsePlan = function (doc) {
     const attr = cells.find(c => ['必修','限选','任选'].includes(c));
     const credit = cells.find(c => /^\d{1,2}(\.\d)?$/.test(c) && c !== code);
     const group = cells.find(c => c.length > 2 && !['必修','限选','任选'].includes(c) && !/^\d/.test(c) && !c.includes('学年') && c !== name);
-    if (name) out.push({ semester: sem + ' ' + season, code, name: name.replace(/\s+/g, ''), attr: attr || '', credits: parseFloat(credit) || 0, group: group || '' });
+    if (name) out.push({ semester: sem + ' ' + season, code, name: name.replace(/\s+/g, ''), attr: attr || '', credits: NX.lastDigitCredits(code) ?? (parseFloat(credit) || 0), group: group || '' });
   }
   return out;
 };
@@ -39,7 +39,7 @@ NX.parseFullProgram = function (doc) {
     const idx = cells.length >= 9 ? 2 : 0;
     const code = cells[idx], name = cells[idx + 1];
     if (code && name && /^\d+$/.test(code))
-      out.push({ code, name, credits: parseFloat(cells[idx + 2]) || 0, attr, group: grp, semester: '' });
+      out.push({ code, name, credits: NX.lastDigitCredits(code) ?? (parseFloat(cells[idx + 2]) || 0), attr, group: grp, semester: '' });
   }
   return out;
 };
@@ -114,7 +114,7 @@ NX.parseCatalog = function (doc) {
       code,
       seq: cell(ix('seq')),
       name,
-      credits: parseFloat(cell(ix('credits'))) || 0,
+      credits: NX.lastDigitCredits(code) ?? (parseFloat(cell(ix('credits'))) || 0),
       teacher: cell(tIdx),
       teacherId,
       department: cell(ix('department')),
@@ -1136,8 +1136,11 @@ NX.fetchSelectedCourses = async function () {
       // 通吃——否则预览课表整屏课号（OneTHU 实测事故，同款）。
       const nameCell = [cell(4), cell(3)].find(x => x !== '' && !/^\d+$/.test(x)) || '';
       selected.push({
-        code, seq, name: nameCell || cell(1), teacher: cell(7) || cell(2),
-        time: cell(6) || cell(3), credits: parseFloat(cell(8) || cell(4)) || 0,
+        code, seq, name: nameCell || cell(1),
+        // 教师列 cell(7) 常空（2026-2027-1 列序变更后），cell(2) 实为学分位——
+        // 纯数字不是教师，宁可留空（整体课表/池行随后回填真名）
+        teacher: cell(7) || (/^\d+$/.test(cell(2)) ? '' : cell(2)),
+        time: cell(6) || cell(3), credits: NX.lastDigitCredits(code) ?? (parseFloat(cell(8) || cell(4)) || 0),
         typeLabel,
         zy: zyNum,
         typeCode: isSportsCourse ? 'ty' : (zyInfo.typeCode || ''),
@@ -1148,12 +1151,14 @@ NX.fetchSelectedCourses = async function () {
       // 兜底（v1.4.9）：已选查询页拿不到行（选课阶段切换/页面变更/WebVPN）时，
       // 改用一级课表重建已选清单（code+seq+类型全集，志愿号走 zyCache/手填）
       console.warn(NX.TAG, 'yxSearchTab empty → falling back to level table');
-      return await NX.fallbackSelectedFromLevelTable();
+      return await NX.overrideFromWholeTT(await NX.fallbackSelectedFromLevelTable());
     }
-    return selected;
+    // 整体课表正源覆盖（#46）：yxSearchTab 时间列脏数据（错日/教师缺失），
+    // 以 ztkbSearch 格子 id 为准刷新 time/teacher
+    return await NX.overrideFromWholeTT(selected);
   } catch (e) {
     console.warn(NX.TAG, 'fetch selected:', e);
-    try { return await NX.fallbackSelectedFromLevelTable(); } catch (e2) { return []; }
+    try { return await NX.overrideFromWholeTT(await NX.fallbackSelectedFromLevelTable()); } catch (e2) { return []; }
   }
 };
 
@@ -1167,7 +1172,7 @@ NX.fallbackSelectedFromLevelTable = async function () {
     const seq = key.slice(i + 1) || '0';
     const info = map[key];
     out.push({
-      code, seq, name: '', teacher: '', time: '', credits: 0,
+      code, seq, name: '', teacher: '', time: '', credits: NX.lastDigitCredits(code) ?? 0,
       typeLabel: info.typeLabel, typeCode: info.typeCode || '',
       zy: 0, fromLevelTable: true,
     });
@@ -1357,7 +1362,7 @@ NX.fetchCandidateCourses = async function () {
         const typeCode = typeLabel === '必修' ? '006' : typeLabel === '限选' ? '008' : typeLabel === '体育' ? 'ty' : '007';
         out.push({
           code, seq: seq || '0', name, teacher, time,
-          credits: 0, typeLabel, typeCode,
+          credits: NX.lastDigitCredits(code) ?? 0, typeLabel, typeCode,
           zy: zyNum ? ({ '一': 1, '二': 2, '三': 3 }[zyNum[1]] || parseInt(zyNum[1]) || 3) : 3,
           queueTotal, myPos,
           isCandidate: true,
@@ -1379,12 +1384,13 @@ NX.fetchCandidateCourses = async function () {
         const kbDual = await NX.fetchPageDual(BASE + '/xkBks.vxkBksXkbBs.do?m=kbSearch&p_xnxq=' + SEM);
         const kbCand = NX.pickDecoded(h => NX.parseTimetableCandidates(h), kbDual);
         console.log(NX.TAG, 'dlSearch empty → kbSearch candidates:', kbCand.length);
-        if (kbCand.length) return kbCand;
+        if (kbCand.length) return await NX.overrideFromWholeTT(kbCand);
         // 诊断（OneTHU zhjwxkDebug 语义）：0 命中时把页面形态留在控制台
         console.warn(NX.TAG, 'kbSearch 0 candidates: gbk len', kbDual.gbk.length, 'utf8 len', kbDual.utf8.length, 'p_id blocks:', (kbDual.gbk.match(/p_id=/g) || []).length);
       } catch (e) { console.warn(NX.TAG, 'kbSearch fallback:', e); }
     }
-    return candidates;
+    // 候补行同样以整体课表为正源（dlSearch 时间列与 yxSearchTab 同源同病）
+    return await NX.overrideFromWholeTT(candidates);
   } catch (e) {
     console.warn(NX.TAG, 'candidate fetch:', e);
     return [];
@@ -1562,7 +1568,7 @@ NX.parseTabGrid = function (html, attr) {
         code, seq: seq || '0', name,
         attr: (cells[1] || '').replace(/<[^>]+>/g, '').trim() || attr || '',
         time: cells[6] || '', teacher: cells[7] || '',
-        credits: parseFloat(cells[8]) || 0,
+        credits: NX.lastDigitCredits(code) ?? (parseFloat(cells[8]) || 0),
         capacity: 0, remaining: 0, available: true,   // 页签行无余量列——未知≠已满，按需补拉会填
         selected: false, queue: '', group: '', note: '', xkTextNote: '',
         partial: true,   // OneTHU 同款标记：元数据未由全量目录补全
@@ -1662,11 +1668,101 @@ NX.parseTimetableCandidates = function (html) {
       zyStr: '',
       code, name, seq: '0', queueTotal: 0, myPos: 0,
       time: slotStr, teacher: parts[0] || '',
-      credits: 0, typeCode: '007', zy: 3,
+      credits: NX.lastDigitCredits(code) ?? 0, typeCode: '007', zy: 3,
       isCandidate: true, selected: false,
     });
   }
   return [...byCode.values()];
+};
+
+// ─── 整体课表（ztkbSearch）：已选/候补时间·教师正源 ──────────────
+// 实锤（test/ 双存档比对）：已选列表 yxSearchTab 时间列存在脏数据——
+// 10680162「大学生思想文化素养」全周单场次写成 1-3(全周)（周一），整体课表
+// 里同一门课在 a3_2（周二第3大节）；同行教师列缺失（cell(2) 回退吃到学分位
+// 数字）。10680101 形策分周场次同样错日/缺场。教务按格子排课（真冲突选课时
+// 会被拒），故已选/候补行 time/teacher 以整体课表覆盖；暂存且未选的课不在
+// 个人课表里（map 命不中），天然保持原数据链（kkxxSearch/池/knote join）。
+NX.parseWholeTimetable = function (html) {
+  const byCode = new Map();
+  // 块结构（存档实证）：p_id=教师号;课号 … <b>课名</b>（候选为 <b>候选：课名</b>）
+  // … strHTML1+="；教师/类型/周次/(教室)" … getElementById('a{节}_{天}')
+  const re = /p_id=\d+;(\d{6,})[\s\S]{0,900}?getElementById\('a([1-6])_([1-7])'\)/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const code = m[1], slot = m[2], day = m[3];
+    const block = html.slice(m.index, m.index + m[0].length);
+    const nm = /<b>([^<&"'\n]{1,60})<\/b>/.exec(block) || /候选：([^<&"'\n]{1,60})/.exec(block);
+    const name = nm ? nm[1].trim().replace(/^候选：/, '') : '';
+    if (!code || !name) continue;
+    const parts = [...block.matchAll(/strHTML1\s*\+=\s*"；([^"]*)"/g)].map(x => (x[1] || '').trim());
+    const teacher = parts[0] || '';
+    const typeLabel = parts.slice(1).find(p => /^(必修|限选|任选|体育)$/.test(p)) || '';
+    const weeks = parts.slice(1).find(p => p === '全周' || (/\d/.test(p) && /周/.test(p))) || '全周';
+    const slotStr = day + '-' + slot + '(' + weeks + ')';   // 与 parseTimeSlots 同格式
+    let row = byCode.get(code);
+    if (!row) { row = { code, name, teacher, typeLabel, time: '' }; byCode.set(code, row); }
+    if (!row.time.includes(slotStr)) row.time += (row.time ? ',' : '') + slotStr;   // 同课多格合并
+  }
+  return [...byCode.values()];
+};
+
+// 整体课表抓取（pathContent 必须 gbkPercentEncode，同一级课表）：会话级缓存
+// + 8s 竞速超时（页面挂了不拖慢已选首屏）+ 失败 60s 冷却（退课轮询不打转）。
+NX.fetchWholeTimetable = async function (force) {
+  const st = NX.state;
+  if (!st || !st.isZhjwxk) return null;
+  if (!force && st._wholeTTP && st._wholeTTSem === st.SEM) {
+    try { return await st._wholeTTP; } catch (e) { return null; }
+  }
+  if (!force && st._wholeTTFail && Date.now() - st._wholeTTFail < 60000) return null;
+  st._wholeTTSem = st.SEM;
+  st._wholeTTP = (async () => {
+    const url = st.BASE + '/syxk.vsyxkKcapb.do?m=ztkbSearch&p_xnxq=' + st.SEM + '&pathContent=' + NX.gbkPercentEncode('整体课表');
+    const rows = await Promise.race([
+      NX.fetchPageDual(url).then(dual => NX.pickDecoded(h => NX.parseWholeTimetable(h), dual)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('整体课表超时')), 8000)),
+    ]);
+    if (!rows || !rows.length) return null;
+    console.log(NX.TAG, '整体课表:', rows.length, '门（已选/候补时间·教师正源）');
+    return new Map(rows.map(r => [r.code, r]));
+  })();
+  try {
+    const map = await st._wholeTTP;
+    if (!map) { st._wholeTTFail = Date.now(); st._wholeTTP = null; }
+    return map;
+  } catch (e) {
+    console.warn(NX.TAG, '整体课表获取失败（保持原数据链）:', e && e.message || e);
+    st._wholeTTP = null;
+    st._wholeTTFail = Date.now();
+    return null;
+  }
+};
+NX.invalidateWholeTT = function () {
+  const st = NX.state || {};
+  st._wholeTTP = null; st._wholeTTFail = 0;   // 选退课/退队后课表必变，refreshSelected 重拉
+};
+
+// 已选/候补行以整体课表覆盖 time/teacher/name（格子为排课真值；教师列缺失
+// 显示成学分数字的行在此一并修复）。返回原数组引用，全程 fail-soft。
+NX.overrideFromWholeTT = async function (rows) {
+  if (!rows || !rows.length) return rows;
+  let map = null;
+  try { map = await NX.fetchWholeTimetable(); } catch (e) { map = null; }
+  if (!map) return rows;
+  let fixed = 0;
+  rows.forEach(r => {
+    const g = map.get(r.code);
+    if (!g) return;
+    if (g.time && NX.parseTimeSlots(g.time).length && r.time !== g.time) {
+      r.time = g.time; fixed++;
+      try { NX.knoteRemember(r.code, r.seq, r.note || r.xkTextNote || '', r.time); } catch (e) {}
+    }
+    if (g.teacher && r.teacher !== g.teacher) { r.teacher = g.teacher; fixed++; }
+    if (g.name && !r.name) { r.name = g.name; fixed++; }
+    if (g.typeLabel && !r.typeLabel) r.typeLabel = g.typeLabel;
+  });
+  if (fixed) console.log(NX.TAG, '整体课表校正:', fixed, '处（time/teacher/name）');
+  return rows;
 };
 
 // ─── Merge ────────────────────────────────────────────────────
@@ -1807,12 +1903,18 @@ NX.serverSearchStorm = async function (opts) {
     };
     const pages = [];
     for (let p = 2; p <= probeTo; p++) pages.push(p);
-    // 第一轮 5 并发；失败页降并发降速重试两轮（教务/WebVPN 对连发限流：
-    // 用户实锤「加载全部」后 47/427——失败页静默蒸发没有任何重试）
+    // 第一轮 5 并发；失败页降并发降速重试（教务/WebVPN 对连发限流：
+    // 用户实锤「加载全部」后 47/427——失败页静默蒸发没有任何重试）。
+    // 第三轮单并发慢速——顽固页（用户实锤第 8 页两轮仍死）多半是被
+    // 持续限流，隔 700ms 逐个再给一次机会
     let fails = await runPages(pages, 5, 30);
     for (let round = 0; round < 2 && fails.length; round++) {
       console.warn(NX.TAG, '翻页失败重试 第' + (round + 1) + '轮:', fails.join(','));
       fails = await runPages(fails, 2, 250);
+    }
+    if (fails.length) {
+      console.warn(NX.TAG, '翻页失败重试 第3轮(单并发):', fails.join(','));
+      fails = await runPages(fails, 1, 700);
     }
     if (fails.length) console.warn(NX.TAG, '翻页仍失败:', fails.join(','), '——部分页教务限流，可再点「加载全部」续补');
   }
@@ -1924,6 +2026,16 @@ NX.mergeServerRows = function (rows) {
         ((state.levelMap || {})[r.code + '_' + NX.normSeq(r.seq)] ? '(键命中)' : '(键未命中)')).join(' , '));
   }
   if (NX.tbAttach) { try { NX.tbAttach(rows); } catch (e) {} }   // fail-soft
+  // ⚠️ 挂载时机在合并之后——搜索行此刻才有 _tbRef，必须在此处把匹配转移给
+  // 池内 ex 行（getCourse 取回 ex；此前在合并循环里转移是空转：那时
+  // r._tbRef 还没挂——用户实锤「徽章有评分、详情说没评价」二报未除根）
+  try {
+    for (const r of rows) {
+      if (!r._tbRef) continue;
+      const ex = byKey.get(r.code + '_' + NX.normSeq(r.seq || '0'));
+      if (ex && ex !== r && !ex._tbRef) ex._tbRef = r._tbRef;
+    }
+  } catch (e) { console.warn(NX.TAG, 'tbRef 转移失败', e); }
   // 志愿统计：已拉数据立刻应用到本批渲染行（launch 只把数据写进了池内
   // 旧行——搜索/跳转回来的新行对象此前永远拿不到，全卡「无数据」，
   // 用户十一报实锤）；未拉院系防抖补拉，拉完合并 volMap 回刷全池+当前行。

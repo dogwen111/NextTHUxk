@@ -13,7 +13,7 @@ NX.DATA_VER = 6;
 // 版本单源：直接读 manifest（双版本源实录——v2.0.1 只改了 manifest 没改这里，
 // 运行时自报 2.0.0，cmpVer('2.0.1','2.0.0')>0 → 已装 2.0.1 仍永远提示更新）
 NX.CUR_VER = (NX.browser.runtime && NX.browser.runtime.getManifest) ? NX.browser.runtime.getManifest().version : '2.0.0';
-NX.BUILD = 'pagefix1';   // 构建标记：面板+启动日志可见，防「页面刷新了但扩展没刷新」的旧构建疑案
+NX.BUILD = 'tbref2';   // 构建标记：面板+启动日志可见，防「页面刷新了但扩展没刷新」的旧构建疑案
 NX.DANGEROUS_VERS = ['1.0.1','1.0.2','1.0.3','1.1.2','1.2.0'];
 NX.ZY_LIMITS = {
   bx: [[1,1],[2,2],[3,Infinity]], // 必修：1志愿1门, 2志愿2门, 3志愿无限
@@ -346,4 +346,12 @@ NX.lc = function (s) {
   let v = NX._lowerCache.get(s);
   if (v === undefined) { v = s.toLowerCase(); NX._lowerCache.set(s, v); }
   return v;
+};
+
+// 学分规则：本校课（课号纯数字，8 位）学分 = 课号最后一位；
+// 外校课（PK/GPK/BW 等含字母前缀）返回 null，调用方保留学分列原解析值。
+// 各学分解析源头统一走此函数，末位回填/合并/快照链自动继承。
+NX.lastDigitCredits = function (code) {
+  const s = String(code || '');
+  return /^\d+$/.test(s) ? (parseInt(s.slice(-1), 10) || 0) : null;
 };
