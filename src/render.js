@@ -72,6 +72,10 @@ NX.courseCardHtml = function (c, ctx) {
     if (c.teacher) tags.push('<span class="nx-tag">' + esc(c.teacher) + '</span>');
     if (c.time) tags.push('<span class="nx-tag">' + esc(c.time) + '</span>');
     if (c.department) tags.push('<span class="nx-tag">' + esc(c.department) + '</span>');
+    // 课程特色上屏（用户实锤「无法显示查看」——特色此前只进筛选器不上卡片，
+    // 列位自适应修好后也得能看见，才能人工核对筛选对不对）
+    const feat = (c.courseFeature || '').replace(/[;；,，]/g, ' ').trim();
+    if (feat) tags.push('<span class="nx-tag" style="color:#7c5cff;background:rgba(124,92,255,.1);border-color:rgba(124,92,255,.25)">' + esc(feat) + '</span>');
     const vc = volColor(c);
     const volParts = [];
     const isTy = c.attr === '体育' || c.department?.includes('体育') || c.name?.includes('体育') || c.typeLabel === '体育';
@@ -696,16 +700,25 @@ NX.stageProbHtml = function (c) {
   const { isQueuePhase, queueDataMap, allCourses } = state;
   // 课序精确 → 课号兜底（暂存/课余量/kkxx 两套课序号对不上时概率不该消失）
   const ac = NX.courseForStage(c);
-  if (!ac) return '';
   if (isQueuePhase) {
     const qKey = c.code + '_' + NX.normSeq(c.seq);
-    const qd = queueDataMap[qKey];
+    let qd = queueDataMap[qKey];
+    // 池行键兜底：暂存行课序与池/kyl 行两套编号对不上时（形策一族），
+    // 用 courseForStage 仲裁出的池行自己的队列键查
+    if (!qd && ac) qd = queueDataMap[ac.code + '_' + NX.normSeq(ac.seq)];
+    // 池行合成兜底（用户实锤「暂存区不显示当前课余量，要点击跳转才能看到」）：
+    // kkxxSearch 行自带余量列，与列表卡 render.js:105 同款合成——课余量
+    // kylSearch 未覆盖/未跑到时，只要这课在池里就先亮徽章
+    if (!qd && ac && ac.capacity > 0 && ac.remaining !== undefined) {
+      qd = { qRemaining: ac.remaining, qCapacity: ac.capacity, qQueue: 0 };
+    }
     if (qd) {
       const rc = qd.qRemaining > 0 ? '#07c160' : '#ee4d4d';
       return '<div style="margin-top:2px;display:flex;gap:4px;align-items:center;flex-wrap:wrap"><span style="background:rgba(' + (qd.qRemaining > 0 ? '52,199,89' : '255,59,48') + ',.12);color:' + rc + ';padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600">余' + qd.qRemaining + '/' + qd.qCapacity + '</span>' + (qd.qQueue > 0 ? '<span style="background:rgba(255,159,26,.12);color:#ff9f1a;padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600">排队' + qd.qQueue + '人</span>' : '') + '</div>';
     }
     return '';
   }
+  if (!ac) return '';
   const bf = c.baseFlag || baseFlag(ac);
   return fullProbGrid(ac, bf).replace(/margin-top:3px/, 'margin-top:2px');
 };
@@ -926,15 +939,28 @@ NX.renderDrafts = function () {
     btn.onclick = () => {
       const idx = parseInt(btn.dataset.idx);
       const d = savedDrafts[idx];
-      if (d) { state.previewDraftIdx = idx; renderPreviewTT(d.courses, '草稿「' + d.name + '」预览'); }
+      if (!d) return;
+      const stageCart = state.stageCart;
+      const same = stageCart.length === d.courses.length && stageCart.every(s => d.courses.some(c => c.code === s.code && NX.normSeq(c.seq || '0') === NX.normSeq(s.seq || '0')));   // 归一：前导零两套编号（tt-fix2 同族）
+      if (stageCart.length && !same && !confirm('暂存区已有 ' + stageCart.length + ' 门课程，载入草稿「' + d.name + '」将替换它们，继续？')) {
+        renderPreviewTT(d.courses, '草稿「' + d.name + '」预览');
+        return;
+      }
+      state.stageCart = d.courses.map(c => ({ ...c, seq: c.seq || '0', flag: c.flag || 'bx', zy: c.zy || 3 }));
+      store.set('stageCart', state.stageCart);
+      NX.invalidatePreview();
+      state.previewDraftIdx = -1;
+      NX.renderStageCart();
+      NX.filterCourses();
+      renderPreviewTT(state.stageCart, '暂存区预览');
+      NX.showXkResult({ ok: true, msg: '草稿「' + d.name + '」已载入暂存区，可直接修改' });
     };
   });
   el.querySelectorAll('.nx-draft-go').forEach(btn => {
     btn.onclick = () => {
       const d = savedDrafts[parseInt(btn.dataset.idx)];
       if (!d) return;
-      if (!confirm('确定提交「' + d.name + '」？\n将先退选所有已选课程，再选入该草稿中的 ' + d.courses.length + ' 门课程。')) return;
-      promoteDraft(d);
+      promoteDraft(d);   // 确认由 promoteDraft 内差量明细+终确认两级弹窗承担
     };
   });
   el.querySelectorAll('.nx-draft-del').forEach(btn => {
@@ -1461,6 +1487,7 @@ NX.loadAllSearch = async function () {
     state._searchRowsFullTag = NX.serverSigOf();
     // 同上：补齐页合并进会话池（暂存/详情/选课按钮一致可用）
     if ((res.rows || []).length && NX.mergeServerRows(res.rows)) NX.rebuildCourseMap();
+    try { NX.renderStageCart(); } catch (e) {}   // 搜索落池后暂存余量徽章回刷（池行容量/余量刚被新行刷新）
     // #32 定案：补齐后仍 < 服务端总数（翻页请求静默失败等）→ 保留提示可重试，
     // 绝不假装补齐成功（旧版无条件清 flag = 「点了没效果」的误导来源之一）
     const stillIncomplete = !!(res.totalRows && (res.rows || []).length < res.totalRows);
@@ -1600,10 +1627,11 @@ NX.runServerSearch = async function () {
           }
         }
         // 搜索结果带核心池标记渲染（选中/候补徽章与按钮状态一致）
-        const selKeys = new Set(state.allCourses.filter(c => c.selected).map(c => c.code + '_' + (c.seq || '0')));
-        const candKeys = new Set(state.candidateCourses.map(c => c.code + '_' + (c.seq || '0')));
+        // 键归一：已选 '1' vs 搜索行 '01' → #43 标记丢失（PR #44 合并时回归，再修）
+        const selKeys = new Set(state.allCourses.filter(c => c.selected).map(c => c.code + '_' + NX.normSeq(c.seq || '0')));
+        const candKeys = new Set(state.candidateCourses.map(c => c.code + '_' + NX.normSeq(c.seq || '0')));
         (res.rows || []).forEach(r => {
-          const k = r.code + '_' + (r.seq || '0');
+          const k = r.code + '_' + NX.normSeq(r.seq || '0');
           r.selected = selKeys.has(k);
           r.isCandidate = candKeys.has(k);
         });
@@ -1622,6 +1650,7 @@ NX.runServerSearch = async function () {
           // 的 allCourses.find 落空，搜索卡片点暂存静默无效；code_seq 去重，
           // 池内已有行跳过，已选/队列 chip 按 selected/isCandidate 过滤不受污染）
           if ((res.rows || []).length && NX.mergeServerRows(res.rows)) NX.rebuildCourseMap();
+          try { NX.renderStageCart(); } catch (e) {}   // 搜索落池后暂存余量徽章回刷（形策实锤：旧池行容量坏、新行真值被丢）
           state._searchTotalPages = res.totalPages || 0;
           state._searchTotalRows = res.totalRows || 0;
           // 捕捉不完整（OneTHU 同款）：已加载 < 服务端总数 → 尾部页未探测，

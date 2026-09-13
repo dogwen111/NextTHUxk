@@ -46,23 +46,64 @@ NX.parseFullProgram = function (doc) {
 
 NX.parseCatalog = function (doc) {
   const out = [];
+  // ── 表头列位自适应（用户实锤「特色筛不出 + 神秘 0 学分 + 体育漏判」三连：
+  //    2026-2027-1 已选表列序已实锤漂移过，目录表同理一漂 cell(4)/cell(12)/
+  //    cell(0) 全指错格——学分 0、特色恒空筛不出、院系错→体育判定丢→
+  //    baseFlag 落任选提交被拒漏选）。表头行 tr.trr1 扫列名→索引；首条
+  //    数据行课号格码型校验不过就整表回退固定列位（老页面零影响）。
+  const headCells = [...(doc.querySelector('tr.trr1')?.querySelectorAll('td,th') || [])]
+    .map(x => (x.textContent || '').trim());
+  const hIdx = keys => {
+    for (const k of keys) {
+      const i = headCells.findIndex(c => c.includes(k));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const H = {
+    department: hIdx(['院系']),
+    code: hIdx(['课号']),
+    seq: hIdx(['课序号']),
+    name: hIdx(['课程名称', '课程名']),
+    credits: hIdx(['学分']),
+    teacher: hIdx(['教师']),
+    capacity: hIdx(['本科生容量', '本科容量']),
+    remaining: hIdx(['本科生余量', '本科余量']),
+    gradCapacity: hIdx(['研究生容量']),
+    gradRemaining: hIdx(['研究生余量']),
+    time: hIdx(['上课时间']),
+    note: hIdx(['说明', '备注']),
+    feature: hIdx(['课程特色', '特色']),
+    grade: hIdx(['年级']),
+    tongshi: hIdx(['通识']),
+  };
+  // 固定列位（表头认不出时的旧版行为）
+  const F = { department: 0, code: 1, seq: 2, name: 3, credits: 4, teacher: 5, capacity: 6, remaining: 7, gradCapacity: 8, gradRemaining: 9, time: 10, note: 11, feature: 12, grade: 13, tongshi: 18 };
+  let useHead = H.code >= 0 && H.name >= 0;
+  if (useHead) {
+    const r0 = doc.querySelector('tr.trr2');
+    const c0 = r0 ? ((r0.querySelectorAll('td')[H.code]?.textContent || '').trim()) : '';
+    if (!/^[A-Za-z0-9]+$/.test(c0) || !/\d/.test(c0)) useHead = false;   // 表头列名猜错 → 全回退
+  }
+  const ix = k => (useHead && H[k] >= 0 ? H[k] : F[k]);
   doc.querySelectorAll('tr.trr2').forEach(row => {
     const tds = row.querySelectorAll('td');
     if (tds.length < 11) return;
     const cell = i => (tds[i]?.textContent || '').trim().replace(/\s+/g, ' ');
-    const code = cell(1);
-    const name = cell(3);
+    const code = cell(ix('code'));
+    const name = cell(ix('name'));
     // 外校课程课号带前缀：PK=北大、GPK=北大研、BW=北外（如 BW3w0007 含小写
     // 字母）。OneTHU 同款规则：纯字母数字且至少含一个数字——旧版 /^\d+$/
     // 把 PK/GPK/BW 行全吃了（「北大北外课搜不到」实锤）。
     if (!code || !name || !/^[A-Za-z0-9]+$/.test(code) || !/\d/.test(code)) return;
-    const bksCap = parseInt(cell(6)) || 0;
-    const bksRem = parseInt(cell(7)) || 0;
-    const teacherLink = tds[5]?.querySelector('a[href*="showJsDetail"]');
+    const bksCap = parseInt(cell(ix('capacity'))) || 0;
+    const bksRem = parseInt(cell(ix('remaining'))) || 0;
+    const tIdx = ix('teacher'), nIdx = ix('name');
+    const teacherLink = tds[tIdx]?.querySelector('a[href*="showJsDetail"]');
     const teacherHref = teacherLink?.getAttribute('href') || '';
     const teacherIdMatch = teacherHref.match(/p_jsh=([^&]+)/);
     const teacherId = teacherIdMatch ? teacherIdMatch[1] : '';
-    const courseLink = tds[3]?.querySelector('a[href*="showToXs"]');
+    const courseLink = tds[nIdx]?.querySelector('a[href*="showToXs"]');
     const detailHref = courseLink?.getAttribute('href') || '';
     // v1.5.0 同款：行内扫课程属性格（kkxxSearch 网格带「课程属性」列，v1.5.0
     // 用 cells.find 扫。重写时被我硬编码 attr:'' 只靠一级课表回填——培养方案
@@ -71,28 +112,28 @@ NX.parseCatalog = function (doc) {
     const attrCell = [...tds].map(td => (td.textContent || '').trim()).find(c => c === '必修' || c === '限选' || c === '任选');
     out.push({
       code,
-      seq: cell(2),
+      seq: cell(ix('seq')),
       name,
-      credits: parseFloat(cell(4)) || 0,
-      teacher: cell(5),
+      credits: parseFloat(cell(ix('credits'))) || 0,
+      teacher: cell(tIdx),
       teacherId,
-      department: cell(0),
-      time: cell(10),
+      department: cell(ix('department')),
+      time: cell(ix('time')),
       capacity: bksCap,
       remaining: bksRem,
       available: bksRem > 0,
       selected: false,
       queue: '',
-      group: cell(0),
+      group: cell(ix('department')),
       attr: attrCell || '',   // v1.5.0 行内扫描（data.js:24 同款）——培养方案外的课不再塌成「任选」
       detailUrl: detailHref,
-      note: cell(11),   // 说明列 = 外校真实时间载体（OneTHU parseXkCatalogPage td(11) 同款；clockRangesOf 读此字段）
-      xkTextNote: cell(11),
-      courseFeature: cell(12),
-      grade: cell(13),
-      tongshiGroup: cell(18),
-      gradCapacity: parseInt(cell(8)) || 0,
-      gradRemaining: parseInt(cell(9)) || 0,
+      note: cell(ix('note')),   // 说明列 = 外校真实时间载体（OneTHU parseXkCatalogPage td(11) 同款；clockRangesOf 读此字段）
+      xkTextNote: cell(ix('note')),
+      courseFeature: cell(ix('feature')),
+      grade: cell(ix('grade')),
+      tongshiGroup: cell(ix('tongshi')),
+      gradCapacity: parseInt(cell(ix('gradCapacity'))) || 0,
+      gradRemaining: parseInt(cell(ix('gradRemaining'))) || 0,
       volRequired: '', volElective: '', volOptional: '', volSports: '',
     });
   });
@@ -330,6 +371,10 @@ NX.fetchCourseCatalog = async function () {
 // 拉取策略 = 实时院系定向：池内课程按院系去重 → 逐院系 GET
 //   （v1.5.0 同款：首页无 page 无 token，翻页 &page=N）→ 院系内分页
 //   通常 1-3 页。搜索结果行遇到未拉院系按需补拉（防抖、不重拉）。
+// 增量回调（opts.onData，已选课概率优先）：逐院系扫描时每拉完一个院系
+//   （错页校验通过）即回调一次，传全量累积 map——调用方立即合并 volMap +
+//   applyVolunteer 全量重放 + 重渲，已选课卡片不等整轮扫完逐院系点亮
+//   （原先全部院系拉完才一次性上屏 10-20s+ → 首院系 1-2s 即现）。Ty 同。
 // 阶段门控：仅非队列阶段（预选/志愿期）——队列阶段概率走排队/余量模型。
 NX.DEPT_CODES = {
   '建筑学院': '000',
@@ -460,6 +505,7 @@ NX.fetchVolunteer = async function (courses, opts) {
   if (!state.isZhjwxk) return {};
   const { SEM, BASE } = state;
   const force = !!(opts && opts.force);
+  const onData = (opts && opts.onData) || null;   // 增量回调：每院系落地即通知（传全量累积 map）
   const done = state._volDepts || (state._volDepts = {});   // 本会话已拉院系（refreshSelected 用 force 重拉）
   const pool = (courses || []).filter(c => c && c.code && !c.isCandidate);
   const map = {};
@@ -501,6 +547,7 @@ NX.fetchVolunteer = async function (courses, opts) {
       items.forEach(v => { map[v.code + '_' + NX.normSeq(v.seq)] = v; });   // 键归一（前导0课序）
       done[code] = Date.now();
       fetched.push(code);
+      if (onData) { try { onData(map); } catch (e) { console.warn(NX.TAG, 'volunteer onData:', e); } }
     } catch (e) { console.warn(NX.TAG, 'volunteer dept ', code, e); }
   }
   // Ty：体育志愿（无院系轴，全量 ≤20 页；force 重拉）
@@ -524,6 +571,7 @@ NX.fetchVolunteer = async function (courses, opts) {
           { capacity: 0, applied: 0, volRequired: '', volElective: '', volOptional: '' }, map[k], v);
       });
       done.ty = Date.now();
+      if (onData) { try { onData(map); } catch (e) { console.warn(NX.TAG, 'volunteer onData:', e); } }
     } catch (e) { console.warn(NX.TAG, 'volunteer Ty:', e); }
   }
   console.log(NX.TAG, 'volunteer (dept-sync): ', Object.keys(map).length, 'entries, depts', fetched.join(',') || '(无新院系)');
@@ -1182,11 +1230,14 @@ NX.fetchQueueData = async function (courses) {
     const token = (firstHtml.match(/name="token"\s+value="([^"]+)"/) || [])[1] || '';
     const formAction = BASE + '/xkBks.vxkBksJxjhBs.do';
     if (token) {
-      // 池内课程逐门精确查（p_kch）：1 课 1 请求，绝不翻页连发
-      const codes = [...new Set((courses || []).map(c => String(c.code || '').trim()).filter(Boolean))];
-      const kylPost = async code => {
+      // 池内课程逐门精确查（p_kch）：1 课 1 请求，绝不翻页连发。
+      // 查询集并入暂存课（用户实锤「暂存区不显示当前课余量，要点跳转才能看到」：
+      // 暂存课不在搜索池里就永远不进 kyl 查询集，余量徽章恒空）。
+      const coursesAll = (courses || []).concat((state.stageCart || []));
+      const codes = [...new Set(coursesAll.map(c => String(c.code || '').trim()).filter(Boolean))];
+      const kylPost = async (code, page) => {
         const body = new URLSearchParams({
-          m: 'kylSearch', page: '1', token,
+          m: 'kylSearch', page: String(page), token,
           'p_sort.p1': '', 'p_sort.p2': '', 'p_sort.asc1': 'true', 'p_sort.asc2': 'true',
           p_xnxq: SEM, pathContent: '',
           p_kch: code, p_kxh: '', p_kcm: '', p_skxq: '', p_skjc: '', bt: '',
@@ -1195,16 +1246,31 @@ NX.fetchQueueData = async function (courses) {
         const buf = await resp.arrayBuffer();
         return new TextDecoder('gbk').decode(buf);
       };
+      const re = /\[\s*"(\d+)"\s*,\s*"([^"]*?)"\s*,\s*"[^"]*?"\s*,\s*"(\d*)"\s*,\s*"(\d*)"\s*,\s*"[^"]*?"\s*,\s*"[^"]*?"\s*\]/g;
+      const mergeGrid = html => {
+        let n = 0, pm;
+        re.lastIndex = 0;
+        while ((pm = re.exec(html)) !== null) {
+          const key = pm[1] + '_' + (NX.normSeq ? NX.normSeq(pm[2]) : pm[2]);
+          if (!map[key]) { map[key] = { code: pm[1], seq: pm[2], qCapacity: parseInt(pm[3]) || 0, qRemaining: parseInt(pm[4]) || 0, qQueue: 0 }; n++; }
+        }
+        return n;
+      };
       await NX.runPool(codes, 5, async (code, idx) => {
         await new Promise(r => setTimeout(r, 30 * (idx % 5)));   // 微错峰（40/74 教训）
         try {
-          const html = await kylPost(code);
-          if (!html.includes('gridData')) return;
-          let pm;
-          const re = /\[\s*"(\d+)"\s*,\s*"([^"]*?)"\s*,\s*"[^"]*?"\s*,\s*"(\d*)"\s*,\s*"(\d*)"\s*,\s*"[^"]*?"\s*,\s*"[^"]*?"\s*\]/g;
-          while ((pm = re.exec(html)) !== null) {
-            const key = pm[1] + '_' + (NX.normSeq ? NX.normSeq(pm[2]) : pm[2]);
-            if (!map[key]) map[key] = { code: pm[1], seq: pm[2], qCapacity: parseInt(pm[3]) || 0, qRemaining: parseInt(pm[4]) || 0, qQueue: 0 };
+          // 翻页（OneTHU getXkQueueData 同款，页号从 0 起）：单课号也可能几十
+          // 班——形势与政策(10680101) 一班一师全学期 ~40 班，一页装不下，只取
+          // 第 1 页会漏后半教师（用户实锤王洪川班查不到余量）。页数按分页器
+          // 「共N页」，单课号上限 10 页防失控。
+          const firstHtml = await kylPost(code, 0);
+          if (!firstHtml.includes('gridData')) return;
+          mergeGrid(firstHtml);
+          const totalPages = Math.min(parseInt((firstHtml.match(/共\s*(\d+)\s*页/) || [])[1], 10) || 1, 10);
+          for (let p = 1; p < totalPages; p++) {
+            const html = await kylPost(code, p);
+            if (!html.includes('gridData')) break;
+            if (mergeGrid(html) === 0) break;
           }
         } catch (e) { console.warn(NX.TAG, 'kyl code', code, e); }
       });
@@ -1283,8 +1349,12 @@ NX.fetchCandidateCourses = async function () {
         const time = td(7) || '';
         const teacher = td(8) || '';
         if (!code || !name) continue;
+        // 表头行拦截（用户实锤「候选把 课程名·老师 标题栏当一门课」）：行类
+        // 放宽 trr[12] 是为了防新学期改行类，但 trr1=表头（OneTHU 样本同证）
+        // ——「课号/课程名称」是中文照样过上面的非空校验。课号必须码型。
+        if (!/^[A-Za-z0-9]+$/.test(code) || !/\d/.test(code)) continue;
         const zyNum = zyStr.match(/第([一二三1-3])志愿/);   // 一二三/1-3 两种写法都收
-        const typeCode = typeLabel === '必修' ? '006' : typeLabel === '限选' ? '008' : '007';
+        const typeCode = typeLabel === '必修' ? '006' : typeLabel === '限选' ? '008' : typeLabel === '体育' ? 'ty' : '007';
         out.push({
           code, seq: seq || '0', name, teacher, time,
           credits: 0, typeLabel, typeCode,
@@ -1747,20 +1817,43 @@ NX.serverSearchStorm = async function (opts) {
   if (probeTo > 1) {
     const merged = {};
     rows.forEach(r => { merged[r.code + '_' + NX.normSeq(r.seq || '0')] = r; });
+    // 页抓取：0 行（serverSearch 内部吞掉网络/死页错误返回 0 行，不抛——
+    // 旧版 try/catch 永不触发，失败页直接蒸发）或 0 新键（服务端忽略 page
+    // 参数回吐首页内容）都算失败，进重试队列。
+    const runPages = async (pages, conc, stag) => {
+      const fails = [];
+      await runPool(pages, conc, async (p, idx) => {
+        await new Promise(r => setTimeout(r, stag * (idx % conc)));
+        try {
+          const r = await serverSearch({ ...o, page: p });
+          let added = 0;
+          (r.rows || []).forEach(row => {
+            // 课号检索深页护栏：教务若忽略筛选返回未过滤行，只收课号前缀命中的
+            if (exactCode && !String(row.code || '').startsWith((o.kch || '').trim())) return;
+            const k = row.code + '_' + NX.normSeq(row.seq || '0');
+            if (!merged[k]) { merged[k] = row; rows.push(row); added++; }
+          });
+          if (!(r.rows || []).length || added === 0) fails.push(p);   // 空页/回吐页 → 重试
+        } catch (e) { fails.push(p); console.warn(NX.TAG, 'server search page', p, e); }
+      });
+      return fails;
+    };
     const pages = [];
     for (let p = 2; p <= probeTo; p++) pages.push(p);
-    await runPool(pages, 5, async (p, idx) => {
-      await new Promise(r => setTimeout(r, 30 * (idx % 5)));
-      try {
-        const r = await serverSearch({ ...o, page: p });
-        (r.rows || []).forEach(row => {
-          // 课号检索深页护栏：教务若忽略筛选返回未过滤行，只收课号前缀命中的
-          if (exactCode && !String(row.code || '').startsWith((o.kch || '').trim())) return;
-          const k = row.code + '_' + NX.normSeq(row.seq || '0');
-          if (!merged[k]) { merged[k] = row; rows.push(row); }
-        });
-      } catch (e) { console.warn(NX.TAG, 'server search page', p, e); }
-    });
+    // 第一轮 5 并发；失败页降并发降速重试（教务/WebVPN 对连发限流：
+    // 用户实锤「加载全部」后 47/427——失败页静默蒸发没有任何重试）。
+    // 第三轮单并发慢速——顽固页（用户实锤第 8 页两轮仍死）多半是被
+    // 持续限流，隔 700ms 逐个再给一次机会
+    let fails = await runPages(pages, 5, 30);
+    for (let round = 0; round < 2 && fails.length; round++) {
+      console.warn(NX.TAG, '翻页失败重试 第' + (round + 1) + '轮:', fails.join(','));
+      fails = await runPages(fails, 2, 250);
+    }
+    if (fails.length) {
+      console.warn(NX.TAG, '翻页失败重试 第3轮(单并发):', fails.join(','));
+      fails = await runPages(fails, 1, 700);
+    }
+    if (fails.length) console.warn(NX.TAG, '翻页仍失败:', fails.join(','), '——部分页教务限流，可再点「加载全部」续补');
   }
   // 教师名兜底：课名 0 行且非纯数字 → 换教师通道重试一次（单页 + 已知页数）
   if (!rows.length && o.kcm && o.kcm.trim() && !/^\d+$/.test(o.kcm.trim()) && !o.teacher) {
@@ -1811,6 +1904,22 @@ NX.mergeServerRows = function (rows) {
       if (!ex.credits && r.credits) ex.credits = r.credits;
       if (!ex.department && r.department) ex.department = r.department;
       if (!ex.xkTextNote && r.xkTextNote) ex.xkTextNote = r.xkTextNote;
+      // 社区点评匹配转移（用户实锤「徽章显示评分、点详情却说没评价、链接跳
+      // 搜索页」）：搜索行在 serverSearch 里已挂 _tbRef，合并进已有行时若不
+      // 转移，getCourse 取回的旧行无匹配 → 弹窗 e=null →「还没点评」+ 兜底
+      // 链接跳搜索页。徽章行与详情行从此同一份匹配。
+      if (!ex._tbRef && r._tbRef) ex._tbRef = r._tbRef;
+      // 容量/余量刷新（用户实锤「形策跳转左边看得见余量、右边暂存不显示」）：
+      // 旧版只回填文字字段不刷数字——池内残行（列位漂移时代容量解析成 0/旧
+      // 搜索的过期数）永远吃不到新行的真值，暂存徽章合成 ac.capacity>0 就
+      // 恒假。kkxxSearch 行自带容量列，r.capacity>0 才动（分类签行 0/0 占位
+      // 不覆盖）；余量含 0（「余0=已满」是信息，不是未知）。
+      if (r.capacity > 0) {
+        if (ex.capacity !== r.capacity || ex.remaining !== r.remaining) filled++;
+        ex.capacity = r.capacity;
+        ex.remaining = r.remaining;
+        ex.available = r.remaining > 0;
+      }
       if (before !== ex.note + '|' + ex.time) filled++;
     }
     // 课号借用（OneTHU buildRows catByCode.get(code) 同款）：已选/候补/暂存行
@@ -1854,6 +1963,16 @@ NX.mergeServerRows = function (rows) {
         ((state.levelMap || {})[r.code + '_' + NX.normSeq(r.seq)] ? '(键命中)' : '(键未命中)')).join(' , '));
   }
   if (NX.tbAttach) { try { NX.tbAttach(rows); } catch (e) {} }   // fail-soft
+  // ⚠️ 挂载时机在合并之后——搜索行此刻才有 _tbRef，必须在此处把匹配转移给
+  // 池内 ex 行（getCourse 取回 ex；此前在合并循环里转移是空转：那时
+  // r._tbRef 还没挂——用户实锤「徽章有评分、详情说没评价」二报未除根）
+  try {
+    for (const r of rows) {
+      if (!r._tbRef) continue;
+      const ex = byKey.get(r.code + '_' + NX.normSeq(r.seq || '0'));
+      if (ex && ex !== r && !ex._tbRef) ex._tbRef = r._tbRef;
+    }
+  } catch (e) { console.warn(NX.TAG, 'tbRef 转移失败', e); }
   // 志愿统计：已拉数据立刻应用到本批渲染行（launch 只把数据写进了池内
   // 旧行——搜索/跳转回来的新行对象此前永远拿不到，全卡「无数据」，
   // 用户十一报实锤）；未拉院系防抖补拉，拉完合并 volMap 回刷全池+当前行。
