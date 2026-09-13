@@ -885,10 +885,11 @@ NX.backfillStageProbs = async function () {
 
 // ─── Drafts Rendering ─────────────────────────────────────────
 
-// 草稿行概率/余量与暂存行同源（用户定案「草稿专属课走暂存列表取数链路」）：
-// 直接委托 stageProbHtml——快照键 → 池行键（courseForStage 教师仲裁，替代旧
-// 精确键 getCourse，两套课序号更稳）→ 池行合成，三层兜底一处维护。
+// 草稿列表行不显示课余量（用户定案）：队列阶段返回空；预选阶段仍与暂存行同源
+// 委托 stageProbHtml——快照键 → 池行键（courseForStage 教师仲裁）→ 池行合成，
+// 三层兜底一处维护。
 NX.draftCourseProbHtml = function (c) {
+  if (NX.state.isQueuePhase) return '';
   return NX.stageProbHtml(c);
 };
 

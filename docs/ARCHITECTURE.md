@@ -180,7 +180,7 @@ launch()
 ├── 学期竞态守卫后写 staticData（仅 plan）
 ├── renderPlan / renderPreviewTT / renderQueueSection
 ├── renderStageAndDrafts()                # 暂存 + 草稿载入 + baseFlag 迁移
-├── backfillStageRows()                   # 暂存/草稿课不在池 → 按课号补拉（草稿专属课取数与暂存同路，落池点亮余量徽章）
+├── backfillStageRows()                   # 暂存/草稿课不在池 → 按课号补拉（落池点亮暂存余量徽章/草稿预览合成）
 ├── finishLaunch(...)                     # 缓存信息、志愿定时同步、AI 配置回填、
 │                                         # backfillSelTimes、社区评价索引
 └── filterCourses()                       # 初始落点：浏览模式第 1 页
@@ -486,8 +486,8 @@ note/time 合成预览行（不改原行，返回合成副本）。每次渲染�
   不带 `selected/isCandidate`，stage/draft 预览经 `stageStatusOf` 回池仲裁——
   命中已选=绿「已选」、命中候补=橙「排队第X/Y人」，优先于概率/余量标签。余量
   标签同 `stageProbHtml` 三层兜底：queueDataMap 快照键 → 池行键（courseForStage）
-  → 池行合成（capacity/remaining）；草稿专属课经 `backfillStageRows` 补拉落池
-  点亮，kyl 查询集亦并入草稿课号（权威余量 + 排队人数）。
+  → 池行合成（capacity/remaining）；草稿专属课经 `backfillStageRows` 补拉落池后
+  仅由池行合成兜底点亮预览标签（草稿列表行不显示课余量，kyl 查询集不并入草稿课号）。
 - 课块可直接操作：✕ 移除（已选退选走警告弹窗 / 暂存移除 / 草稿删除）、点击
   跳转定位。
 

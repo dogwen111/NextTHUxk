@@ -1238,12 +1238,10 @@ NX.fetchQueueData = async function (courses) {
     const formAction = BASE + '/xkBks.vxkBksJxjhBs.do';
     if (token) {
       // 池内课程逐门精确查（p_kch）：1 课 1 请求，绝不翻页连发。
-      // 查询集并入暂存/草稿课（用户实锤「暂存区不显示当前课余量，要点跳转才能
-      // 看到」：不在搜索池里的课就永远不进 kyl 查询集，余量徽章恒空；草稿专属
-      // 课同路并入——selectBksDlCount 排队人数只对 map 键回填，不并则草稿课
-      // 永远无「排队N人」）。
-      const coursesAll = (courses || []).concat((state.stageCart || []))
-        .concat((state.savedDrafts || []).flatMap(d => d.courses || []));
+      // 查询集并入暂存课（用户实锤「暂存区不显示当前课余量，要点跳转才能
+      // 看到」：不在搜索池里的课就永远不进 kyl 查询集，余量徽章恒空）。
+      // 草稿课号不并：草稿列表行已不显示课余量，预览课表走池行合成兜底。
+      const coursesAll = (courses || []).concat((state.stageCart || []));
       const codes = [...new Set(coursesAll.map(c => String(c.code || '').trim()).filter(Boolean))];
       const kylPost = async (code, page) => {
         const body = new URLSearchParams({
