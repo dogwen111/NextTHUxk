@@ -172,6 +172,7 @@ NX.renderQueueSection = function () {
 NX.backfillSelTimes = async function () {
   const { state } = NX;
   if (!state.isZhjwxk && !state.isWebvpn) return;
+  if (NX.waitInitialBrowse) await NX.waitInitialBrowse();
   const tried = state._selTried || (state._selTried = new Map());   // code_seq → 已试次数
   const sel = state.allCourses.filter(c => c.selected && !c.isCandidate);
   const unparsed = sel.filter(r =>

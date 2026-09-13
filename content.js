@@ -310,6 +310,8 @@ NX.launch = async function launch() {
     }
     if (!state.planData.length) state.planData = planFresh || [];
     state.candidateCourses = candCourses;
+    NX.beginInitialBrowse();
+    NX.filterCourses();
     // 候补元数据回填（OneTHU 同款：按课号逐门单查一页，非全目录爬）——
     // dlSearch/kbSearch 行缺学分/容量，补齐后概率网格/余量徽章即刻可用
     if (candCourses.length) {
@@ -427,6 +429,7 @@ NX.backfillStageRows = function () {
   const stageMiss = (state.stageCart || []).filter(s => !state.allCourses.some(ac => ac.code === s.code && NX.normSeq(ac.seq || '0') === NX.normSeq(s.seq || '0')));
   if (!stageMiss.length) return;
   (async () => {
+    if (NX.waitInitialBrowse) await NX.waitInitialBrowse();
     for (let i = 0; i < stageMiss.length; i += 5) {
       await Promise.all(stageMiss.slice(i, i + 5).map(async s => {
         try {
